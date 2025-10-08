@@ -16,18 +16,52 @@
 namespace dynamixel_hw
 {
 
-  CallbackReturn DynamixelHw::on_init(const hardware_interface::HardwareInfo &info)
+  CallbackReturn DynamixelHw::on_init(const hardware_interface::HardwareComponentInterfaceParams & params)
   {
     RCLCPP_INFO(rclcpp::get_logger("DynamixelHw"), "configure");
-    if (hardware_interface::SystemInterface::on_init(info) != CallbackReturn::SUCCESS)
+    if (hardware_interface::HardwareComponentInterface::on_init(params) != CallbackReturn::SUCCESS)
     {
       return CallbackReturn::ERROR;
     }
 
-    config_.usb_port = info_.hardware_parameters["usb_port"];
-    config_.baud_rate = std::stoi(info_.hardware_parameters["baud_rate"]);
-    config_.left_wheel_name = info_.hardware_parameters["left_wheel_name"];
-    config_.right_wheel_name = info_.hardware_parameters["right_wheel_name"];
+  const auto & hp = params.hardware_info.hardware_parameters;
+
+  auto get_required_str = [&](const char* key) -> std::optional<std::string> {
+    auto it = hp.find(key);
+    if (it == hp.end()) {
+      RCLCPP_ERROR(rclcpp::get_logger("dynamixel_hw"), "Missing required param '%s'", key);
+      return std::nullopt;
+    }
+    return it->second;
+  };
+
+  auto get_required_int = [&](const char* key) -> std::optional<int> {
+    auto s = get_required_str(key);
+    if (!s) return std::nullopt;
+    try { return std::stoi(*s); }
+    catch (...) {
+      RCLCPP_ERROR(rclcpp::get_logger("dynamixel_hw"),
+                   "Param '%s' must be an integer, got '%s'", key, s->c_str());
+      return std::nullopt;
+    }
+  };
+
+  // --- read your params (names as you used them) ---
+  auto usb_port      = get_required_str("usb_port");
+  auto baud_rate     = get_required_int("baud_rate");
+  auto left_name     = get_required_str("left_wheel_name");
+  auto right_name    = get_required_str("right_wheel_name");
+
+  if (!usb_port || !baud_rate || !left_name || !right_name) {
+    return hardware_interface::CallbackReturn::ERROR;
+  }
+
+  // store
+  config_.usb_port        = *usb_port;
+  config_.baud_rate       = *baud_rate;
+  config_.left_wheel_name = *left_name;
+  config_.right_wheel_name= *right_name;
+
 
     for (const hardware_interface::ComponentInfo &joint : info_.joints)
     {
