@@ -203,3 +203,35 @@ TEST(PositionUnwrapper, NoiseAtRestIsHarmless)
   }
   EXPECT_NEAR(u.position_counts(), 830.0, 1.0);
 }
+
+#include "dynamixel_hw/dead_reckoning.hpp"
+
+TEST(DeadReckoning, StoppedWheelPredictsNoMotion)
+{
+  EXPECT_DOUBLE_EQ(dynamixel_hw::prediction_velocity(0.0, 3.35), 0.0);
+}
+
+TEST(DeadReckoning, UsesMeasuredVelocityWhileCommanded)
+{
+  EXPECT_DOUBLE_EQ(dynamixel_hw::prediction_velocity(3.4, 3.35), 3.35);
+  EXPECT_DOUBLE_EQ(dynamixel_hw::prediction_velocity(-3.4, -3.35), -3.35);
+}
+
+TEST(DeadReckoning, FallsBackToCommand)
+{
+  EXPECT_DOUBLE_EQ(dynamixel_hw::prediction_velocity(2.0, 0.05), 2.0);  // no usable measurement
+  EXPECT_DOUBLE_EQ(dynamixel_hw::prediction_velocity(2.0, -1.0), 2.0);  // opposite direction
+}
+
+TEST(DeadReckoning, StoppedInDeadZoneDoesNotRunAway)
+{
+  PositionUnwrapper u;
+  u.reset(500);
+  // wheel at rest on the 1023 plateau; the old rule predicted 40 counts/cycle forever
+  for (int i = 0; i < 1000; ++i)
+  {
+    const double v = dynamixel_hw::prediction_velocity(0.0, 3.35);
+    u.update(1023, v);
+  }
+  EXPECT_NEAR(u.position_counts(), 500.0, 1e-9);
+}

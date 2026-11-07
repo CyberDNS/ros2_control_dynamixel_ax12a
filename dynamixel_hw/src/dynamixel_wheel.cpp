@@ -4,6 +4,7 @@
 
 #include "dynamixel_hw/dynamixel_connection.hpp"
 #include "dynamixel_hw/dynamixel_wheel.hpp"
+#include "dynamixel_hw/dead_reckoning.hpp"
 #include "rclcpp/rclcpp.hpp"
 
 #define ADDR_TORQUE_ENABLE 24  // 1 byte
@@ -221,7 +222,7 @@ namespace dynamixel_hw
         // Motion expected since the last cycle, in potentiometer counts (sign of the servo frame).
         // The measured velocity predicts better than the command (the servo does not run at the
         // commanded speed); at the start of a motion, before the measurement catches up, use the command.
-        const double predict_vel = (std::fabs(estimator_.velocity()) > 0.1) ? estimator_.velocity() : executed_vel_;
+        const double predict_vel = prediction_velocity(executed_vel_, estimator_.velocity());
         const double predicted_counts = inverted_ * predict_vel * dt / PositionUnwrapper::kRadPerCount;
 
         // A failed read is fed in as an invalid value: the position is then dead-reckoned
@@ -233,7 +234,8 @@ namespace dynamixel_hw
         // dead-reckoned samples and the re-synchronising jump after them would distort the velocity.
         estimator_.push(pos, dt, used && prev_reading_used_);
         prev_reading_used_ = used;
-        vel = estimator_.velocity();
+        // the estimate is frozen while readings are rejected: a stopped wheel must read zero
+        vel = (std::fabs(executed_vel_) < 1e-6 && !estimator_.valid()) ? 0.0 : estimator_.velocity();
         prev_pos_ = pos;
 
         return read_ok;
