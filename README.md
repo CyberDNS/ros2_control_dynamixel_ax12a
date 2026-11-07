@@ -69,3 +69,86 @@ Example xacro file:
     </ros2_control>
 </robot>
 ```
+
+## 🧱 Building the Project (ROS 2 Jazzy)
+
+> **Prerequisites:**  
+> Ubuntu 24.04 (or Raspberry Pi with Ubuntu 24.04)  
+> ROS 2 **Jazzy Jalisco** installed and sourced from `/opt/ros/jazzy`.
+
+---
+
+### 1️⃣ Bootstrap dependencies (run once)
+From the repository root:
+
+```bash
+bash scripts/bootstrap.sh
+```
+
+This script installs `ros-dev-tools`, initializes and updates `rosdep`, and installs all missing system dependencies so your packages can be built cleanly.
+
+---
+
+### 2️⃣ Build the workspace
+After bootstrapping (or in a new shell):
+
+```bash
+source /opt/ros/jazzy/setup.bash
+colcon build --symlink-install
+```
+
+> 💡 The `--symlink-install` option creates symbolic links instead of copying files,  
+> which allows you to edit source, launch, or configuration files without rebuilding.
+
+---
+
+### 3️⃣ Source the environment
+After a successful build:
+
+```bash
+source install/setup.bash
+```
+
+Your hardware plugin (`dynamixel_hw`) and the vendor library (`dynamixel_sdk_vendor`)  
+are now available to ROS 2 and can be used in other workspaces.
+
+---
+
+### 4️⃣ Using this build in conjunction with another workspace
+
+If you have another ROS 2 workspace (for example, your robot’s launch or simulation repo),  
+you can **overlay** this workspace by sourcing both in order:
+
+```bash
+# Source base ROS 2 installation
+source /opt/ros/jazzy/setup.bash
+
+# Source the Dynamixel control workspace (this repo)
+source ~/repos/ros2_control_dynamixel_ax12a/install/setup.bash
+
+# Now source your robot workspace
+source ~/repos/bungy_robot/install/setup.bash
+```
+
+This ensures that your robot workspace sees and can load the `dynamixel_hw` plugin.
+
+---
+
+### 🔧 Clean rebuild (if needed)
+
+```bash
+colcon build --symlink-install --cmake-clean-cache
+# or start completely fresh
+rm -rf build install log && colcon build --symlink-install
+```
+
+---
+
+### ✅ Optional sanity check
+
+Verify that your plugin is visible to `hardware_interface`:
+
+```bash
+ros2 pkg plugins --package hardware_interface | grep dynamixel_hw
+```
+
