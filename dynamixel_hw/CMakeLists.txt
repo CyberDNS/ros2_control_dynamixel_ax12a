@@ -67,6 +67,8 @@ if(BUILD_TESTING)
   target_include_directories(test_position_unwrapper PRIVATE include)
   ament_add_gtest(test_velocity_loop test/test_velocity_loop.cpp)
   target_include_directories(test_velocity_loop PRIVATE include)
+  ament_add_gtest(test_voltage_monitor test/test_voltage_monitor.cpp)
+  target_include_directories(test_voltage_monitor PRIVATE include)
 endif()
 
 # ---- Ament exports ----------------------------------------------------------

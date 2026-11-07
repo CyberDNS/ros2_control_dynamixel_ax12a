@@ -26,6 +26,10 @@ namespace dynamixel_hw
     /// Command a wheel velocity [rad/s]. With the velocity loop enabled the command is corrected
     /// with the measured velocity (needs init_position()); otherwise it is sent as is.
     bool drive(double target_velocity, double dt);
+    /// Best effort: set the servo speed to 0 right now (used on errors).
+    bool stop();
+    /// Servo supply voltage in volts (register 42).
+    bool read_voltage(double &volts);
     void configure_velocity_loop(bool enabled, const VelocityController::Params &params);
     /// Velocity the servo was last told to run at (after quantisation and deadband) [rad/s].
     double get_velocity();
@@ -49,6 +53,7 @@ namespace dynamixel_hw
     bool velocity_loop_ = false;
     bool feedback_active_ = false;
     bool prev_reading_used_ = true;
+    bool connected_ = false;
     PositionUnwrapper unwrapper_;
     double anchor_counts_ = 0.0;
     double prev_pos_ = 0.0;

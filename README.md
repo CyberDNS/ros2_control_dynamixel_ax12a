@@ -184,3 +184,14 @@ echo 'ACTION=="add", SUBSYSTEM=="usb-serial", DRIVER=="ftdi_sio", ATTR{latency_t
 ```
 
 Run the unit tests with `colcon test --packages-select dynamixel_hw`.
+
+## Safety
+
+* **Supply voltage monitoring.** About once per second the driver reads each servo's supply voltage
+  (register 42). It logs a warning below `min_voltage_warn` (default 10.5 V) and, after 3 consecutive
+  readings below `min_voltage_stop` (default 9.6 V), stops the wheels and reports an error.
+  The defaults suit a 3S Li-ion/LiPo pack (AX-12A minimum is 9 V). Set a threshold to `0` to disable it.
+* **Stop on error.** `on_error` sets both servo speeds to 0 and disables torque. A servo keeps its last
+  speed command when the controlling computer disappears (crash, reset, power loss), and the driver
+  cannot prevent that. For a robot that drives on the floor, add a hardware cut-off that defaults to off.
+* Velocity loop parameters: `velocity_loop` (default `true`), `velocity_kp` (0.3), `velocity_ki` (2.0).

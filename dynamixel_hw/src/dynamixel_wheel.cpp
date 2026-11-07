@@ -10,6 +10,7 @@
 #define ADDR_CW_ANGLE_LIMIT 6  // 2 byte
 #define ADDR_CCW_ANGLE_LIMIT 8 // 2 byte
 #define ADDR_MOVING_SPEED 32   // 2 byte
+#define ADDR_PRESENT_VOLTAGE 42 // 1 byte, 0.1 V units
 #define ADDR_PRESENT_POSITION 36 // 2 byte, potentiometer 0..1023 over 300 deg
 #define ADDR_PRESENT_SPEED 38  // 2 byte (unreliable in wheel mode, not used)
 
@@ -37,6 +38,7 @@ namespace dynamixel_hw
     bool DynamixelWheel::setup(const DynamixelConnection &connection)
     {
         connection_ = connection;
+        connected_ = true;
 
         bool is_success = true;
         // Use wheel mode
@@ -79,6 +81,13 @@ namespace dynamixel_hw
 
     void DynamixelWheel::shutdown()
     {
+        if (!connected_)
+        {
+            return;
+        }
+        connected_ = false;
+        // Speed first: a servo keeps its last speed command even with the controller gone
+        connection_.write2ByteTxRx(dynamixel_id_, ADDR_MOVING_SPEED, 0);
         // Disable Torque of DYNAMIXEL
         bool is_success = connection_.write1ByteTxRx(dynamixel_id_, ADDR_TORQUE_ENABLE, 0);
         if (!is_success)
@@ -132,6 +141,28 @@ namespace dynamixel_hw
     double DynamixelWheel::get_velocity()
     {
         return executed_vel_;
+    }
+
+    bool DynamixelWheel::stop()
+    {
+        executed_vel_ = 0.0;
+        controller_.reset();
+        if (!connected_)
+        {
+            return false;
+        }
+        return connection_.write2ByteTxRx(dynamixel_id_, ADDR_MOVING_SPEED, 0);
+    }
+
+    bool DynamixelWheel::read_voltage(double &volts)
+    {
+        uint8_t raw = 0;
+        if (!connected_ || !connection_.read1ByteTxRx(dynamixel_id_, ADDR_PRESENT_VOLTAGE, &raw))
+        {
+            return false;
+        }
+        volts = raw / 10.0;
+        return true;
     }
 
     void DynamixelWheel::configure_velocity_loop(bool enabled, const VelocityController::Params &params)

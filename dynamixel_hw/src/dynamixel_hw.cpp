@@ -86,6 +86,14 @@ namespace dynamixel_hw
   config_.velocity_loop = config_.position_feedback && get_bool("velocity_loop", true);
   config_.velocity_kp = get_double("velocity_kp", config_.velocity_kp);
   config_.velocity_ki = get_double("velocity_ki", config_.velocity_ki);
+  config_.min_voltage_warn = get_double("min_voltage_warn", config_.min_voltage_warn);
+  config_.min_voltage_stop = get_double("min_voltage_stop", config_.min_voltage_stop);
+  {
+    VoltageMonitor::Params mp;
+    mp.warn_volts = config_.min_voltage_warn;
+    mp.stop_volts = config_.min_voltage_stop;
+    voltage_monitor_ = VoltageMonitor(mp);
+  }
   RCLCPP_INFO(rclcpp::get_logger("DynamixelHw"), "position_feedback=%s velocity_loop=%s (kp=%.2f ki=%.2f)",
               config_.position_feedback ? "true" : "false (open loop)",
               config_.velocity_loop ? "true" : "false", config_.velocity_kp, config_.velocity_ki);
@@ -240,9 +248,56 @@ namespace dynamixel_hw
     return CallbackReturn::SUCCESS;
   }
 
+  CallbackReturn DynamixelHw::on_error(const rclcpp_lifecycle::State & /* previous_state */)
+  {
+    // A servo keeps its last speed command when the controller goes away, so make sure
+    // it is stopped before the component is taken out of service.
+    RCLCPP_ERROR(rclcpp::get_logger("DynamixelHw"), "error state: stopping the wheels");
+    left_wheel_.stop();
+    right_wheel_.stop();
+    left_wheel_.shutdown();
+    right_wheel_.shutdown();
+    return CallbackReturn::SUCCESS;
+  }
+
   return_type DynamixelHw::read(const rclcpp::Time & /*time*/, const rclcpp::Duration &period)
   {
     const double delta_seconds = period.seconds();
+
+    // Servo supply voltage, about once per second
+    seconds_since_voltage_check_ += delta_seconds;
+    if (seconds_since_voltage_check_ >= 1.0)
+    {
+      seconds_since_voltage_check_ = 0.0;
+      double vl = 0.0, vr = 0.0;
+      const bool okl = left_wheel_.read_voltage(vl);
+      const bool okr = right_wheel_.read_voltage(vr);
+      if (okl || okr)
+      {
+        const double volts = (okl && okr) ? std::min(vl, vr) : (okl ? vl : vr);
+        switch (voltage_monitor_.update(volts))
+        {
+        case VoltageMonitor::State::kStop:
+          RCLCPP_ERROR(rclcpp::get_logger("DynamixelHw"),
+                       "Servo supply voltage %.1f V is below the stop limit (%.1f V): stopping the wheels",
+                       volts, config_.min_voltage_stop);
+          left_wheel_.stop();
+          right_wheel_.stop();
+          return return_type::ERROR;
+        case VoltageMonitor::State::kWarn:
+          if (voltage_warnings_++ % 10 == 0) // every ~10 s
+          {
+            RCLCPP_WARN(rclcpp::get_logger("DynamixelHw"),
+                        "Low servo supply voltage: %.1f V (left %.1f, right %.1f; warn below %.1f V)",
+                        volts, vl, vr, config_.min_voltage_warn);
+          }
+          break;
+        case VoltageMonitor::State::kOk:
+          voltage_warnings_ = 0;
+          break;
+        }
+      }
+    }
 
     if (config_.position_feedback)
     {
