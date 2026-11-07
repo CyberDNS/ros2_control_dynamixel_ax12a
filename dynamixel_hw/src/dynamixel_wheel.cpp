@@ -182,7 +182,7 @@ namespace dynamixel_hw
         {
             return rotate(target_velocity);
         }
-        return rotate(controller_.update(target_velocity, estimator_.velocity(), estimator_.valid(), dt));
+        return rotate(controller_.update(target_velocity, estimator_.velocity(), estimator_.valid(), dt, pos, true));
     }
 
     bool DynamixelWheel::init_position()

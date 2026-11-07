@@ -30,12 +30,14 @@ namespace dynamixel_hw
       double ki = 2.0;              // [1/s]
       double max_correction = 3.0;  // largest |ki * integral| [rad/s]
       double max_output = 6.0;      // [rad/s]
+      double kpos = 4.0;            // position-tracking gain [1/s]; 0 disables
+      double max_pos_correction = 0.8;  // largest |kpos * position error| [rad/s]
     };
 
     VelocityController() = default;
     explicit VelocityController(const Params &params) : params_(params) {}
 
-    void reset() { integral_ = 0.0; last_target_ = 0.0; }
+    void reset() { integral_ = 0.0; last_target_ = 0.0; have_ref_ = false; }
 
     /**
      * @param target          requested wheel velocity [rad/s]
@@ -45,6 +47,20 @@ namespace dynamixel_hw
      * @return velocity command for the servo [rad/s]
      */
     double update(double target, double measured, bool measured_valid, double dt)
+    {
+      return update(target, measured, measured_valid, dt, 0.0, false);
+    }
+
+    /**
+     * Same, with position tracking: the wheel is also pulled towards a reference position that
+     * integrates the target velocity from the start of the motion. A servo that starts late or
+     * runs slow during the acceleration then catches up, so the two wheels of the robot stay in
+     * step (otherwise a start-up lag of one wheel stays as a heading error).
+     *
+     * @param position      measured wheel position [rad], only used if @p position_valid
+     */
+    double update(double target, double measured, bool measured_valid, double dt,
+                  double position, bool position_valid)
     {
       if (std::fabs(target) < 1e-3)
       {
@@ -56,6 +72,22 @@ namespace dynamixel_hw
         integral_ = 0.0; // direction change
       }
       last_target_ = target;
+
+      if (position_valid && params_.kpos > 0.0)
+      {
+        if (!have_ref_ || target * ref_dir_ < 0.0)
+        {
+          pos_ref_ = position;
+          have_ref_ = true;
+          ref_dir_ = target;
+        }
+        pos_ref_ += target * dt;
+        // a blocked wheel must not build up an unbounded reference
+        const double limit = params_.max_pos_correction / params_.kpos;
+        pos_ref_ = std::clamp(pos_ref_, position - limit, position + limit);
+        target += std::clamp(params_.kpos * (pos_ref_ - position), -params_.max_pos_correction,
+                             params_.max_pos_correction);
+      }
 
       double error = 0.0;
       if (measured_valid)
@@ -75,6 +107,9 @@ namespace dynamixel_hw
     Params params_;
     double integral_ = 0.0;
     double last_target_ = 0.0;
+    double pos_ref_ = 0.0;
+    double ref_dir_ = 0.0;
+    bool have_ref_ = false;
   };
 }
 

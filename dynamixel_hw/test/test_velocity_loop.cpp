@@ -223,3 +223,69 @@ TEST(VelocityController, IntegralIsLimited)
   EXPECT_LE(p.ki * ctl.integral(), p.max_correction + 1e-9);
   EXPECT_LE(ctl.update(2.0, 0.0, true, kDt), p.max_output);
 }
+
+namespace
+{
+  /// Two different servos follow the same ramp; return the largest position difference [rad].
+  double max_position_gap(bool position_tracking)
+  {
+    Servo left;
+    Servo right;
+    left.gain = 1.05;   // slower, more friction
+    left.offset = 0.5;
+    right.gain = 1.2;
+    right.offset = 0.2;
+    VelocityController::Params p;
+    if (!position_tracking)
+    {
+      p.kpos = 0.0;
+    }
+    VelocityController cl(p), cr(p);
+    VelocityEstimator el, er;
+    el.reset(0.0);
+    er.reset(0.0);
+    double cmd_l = 0.0, cmd_r = 0.0, worst = 0.0;
+    for (int i = 0; i < static_cast<int>(6.0 / kDt); ++i)
+    {
+      const double t = i * kDt;
+      const double target = std::min(3.3, 3.3 * t / 1.0); // 1 s acceleration ramp
+      left.step(cmd_l, kDt);
+      right.step(cmd_r, kDt);
+      el.push(left.measured_position(), kDt, true);
+      er.push(right.measured_position(), kDt, true);
+      cmd_l = cl.update(target, el.velocity(), el.valid(), kDt, left.measured_position(), true);
+      cmd_r = cr.update(target, er.velocity(), er.valid(), kDt, right.measured_position(), true);
+      worst = std::max(worst, std::fabs(left.position - right.position));
+    }
+    return worst;
+  }
+}
+
+TEST(VelocityController, PositionTrackingKeepsWheelsInStep)
+{
+  const double without = max_position_gap(false);
+  const double with = max_position_gap(true);
+  EXPECT_LT(with, without * 0.6) << "without " << without << " with " << with;
+}
+
+TEST(VelocityController, PositionReferenceIsBounded)
+{
+  VelocityController::Params p;
+  VelocityController ctl(p);
+  double out = 0.0;
+  for (int i = 0; i < 3000; ++i)
+  {
+    out = ctl.update(2.0, 0.0, true, kDt, 0.0, true); // blocked wheel
+  }
+  EXPECT_LE(out, p.max_output);
+}
+
+TEST(VelocityController, PositionReferenceRestartsAfterStop)
+{
+  VelocityController ctl;
+  for (int i = 0; i < 30; ++i) ctl.update(2.0, 2.0, true, kDt, i * 2.0 * kDt, true);
+  ctl.update(0.0, 0.0, true, kDt, 2.0, true);
+  // a new motion starts from the current position: no kick from the old reference
+  const double out = ctl.update(2.0, 0.0, false, kDt, 2.0, true);
+  EXPECT_NEAR(out, 2.0, 0.3); // at most one cycle of lead: kpos * target * dt = 0.27
+}
