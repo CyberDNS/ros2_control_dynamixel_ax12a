@@ -10,7 +10,8 @@
 #define ADDR_CW_ANGLE_LIMIT 6  // 2 byte
 #define ADDR_CCW_ANGLE_LIMIT 8 // 2 byte
 #define ADDR_MOVING_SPEED 32   // 2 byte
-#define ADDR_PRESENT_SPEED 38  // 2 byte
+#define ADDR_PRESENT_POSITION 36 // 2 byte, potentiometer 0..1023 over 300 deg
+#define ADDR_PRESENT_SPEED 38  // 2 byte (unreliable in wheel mode, not used)
 
 #define MIN_MOVING_SPEED_VALUE 80
 #define MAX_MOVING_SPEED_VALUE 1023
@@ -93,8 +94,18 @@ namespace dynamixel_hw
     bool DynamixelWheel::rotate(double velocity)
     {
 
-        uint16_t cur_dynamixel_vel = convert_to_dynamixel_vel(vel);
+        uint16_t cur_dynamixel_vel = convert_to_dynamixel_vel(executed_vel_);
         uint16_t dynamixel_vel = convert_to_dynamixel_vel(velocity);
+
+        // A non-zero request that falls into the servo's low-speed deadband does not move the wheel
+        const bool in_deadband = (dynamixel_vel == 0) && (std::fabs(velocity) > 1e-6);
+        if (in_deadband && !deadband_warned_)
+        {
+            RCLCPP_WARN(rclcpp::get_logger(LOGGER_IDENTIFIER),
+                        "%s: requested %.3f rad/s is below the minimum wheel speed (%.3f rad/s) and is ignored",
+                        name.c_str(), velocity, MIN_MOVING_SPEED_VALUE / CONVERSION_FACTOR);
+        }
+        deadband_warned_ = in_deadband;
 
         if (dynamixel_vel != cur_dynamixel_vel)
         {
@@ -110,9 +121,9 @@ namespace dynamixel_hw
             }
         }
         
-        vel = convert_to_ros_control_vel(dynamixel_vel);
+        executed_vel_ = convert_to_ros_control_vel(dynamixel_vel);
 
-        RCLCPP_DEBUG(rclcpp::get_logger(LOGGER_IDENTIFIER), "%s: requested=%f executed=%f", name.c_str(), velocity, vel);
+        RCLCPP_DEBUG(rclcpp::get_logger(LOGGER_IDENTIFIER), "%s: requested=%f executed=%f", name.c_str(), velocity, executed_vel_);
 
 
         return true;
@@ -120,7 +131,59 @@ namespace dynamixel_hw
 
     double DynamixelWheel::get_velocity()
     {
-        return vel;
+        return executed_vel_;
+    }
+
+    bool DynamixelWheel::init_position()
+    {
+        uint16_t raw = 0;
+        if (!connection_.read2ByteTxRx(dynamixel_id_, ADDR_PRESENT_POSITION, &raw))
+        {
+            RCLCPP_ERROR(rclcpp::get_logger(LOGGER_IDENTIFIER), "%s: failed to read the initial position.", name.c_str());
+            return false;
+        }
+        unwrapper_.reset(raw);
+        anchor_counts_ = unwrapper_.position_counts();
+        pos = 0.0;
+        prev_pos_ = 0.0;
+        vel = 0.0;
+        consecutive_failures_ = 0;
+        RCLCPP_INFO(rclcpp::get_logger(LOGGER_IDENTIFIER), "%s: position feedback started at raw=%u", name.c_str(), raw);
+        return true;
+    }
+
+    bool DynamixelWheel::update_from_hardware(double dt)
+    {
+        if (dt <= 0.0)
+        {
+            return true;
+        }
+
+        uint16_t raw = 0;
+        const bool read_ok = connection_.read2ByteTxRx(dynamixel_id_, ADDR_PRESENT_POSITION, &raw);
+        consecutive_failures_ = read_ok ? 0 : consecutive_failures_ + 1;
+
+        // Motion expected since the last cycle, in potentiometer counts (sign of the servo frame)
+        const double predicted_counts = inverted_ * executed_vel_ * dt / PositionUnwrapper::kRadPerCount;
+
+        // A failed read is fed in as an invalid value: the position is then dead-reckoned
+        const bool used = unwrapper_.update(read_ok ? static_cast<int>(raw) : -1, predicted_counts);
+
+        pos = inverted_ * (unwrapper_.position_counts() - anchor_counts_) * PositionUnwrapper::kRadPerCount;
+
+        if (used)
+        {
+            // Light low-pass on the finite-difference velocity (one count is ~0.15 rad/s at 30 Hz)
+            constexpr double alpha = 0.3;
+            vel = alpha * (pos - prev_pos_) / dt + (1.0 - alpha) * vel;
+        }
+        else
+        {
+            vel = executed_vel_;
+        }
+        prev_pos_ = pos;
+
+        return read_ok;
     }
 
     uint16_t DynamixelWheel::convert_to_dynamixel_vel(double rad_vel)

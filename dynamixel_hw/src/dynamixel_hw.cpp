@@ -1,6 +1,9 @@
 #include "dynamixel_hw/dynamixel_hw.hpp"
 
+#include <algorithm>
 #include <chrono>
+#include <optional>
+#include <string>
 #include <cmath>
 #include <cstddef>
 #include <limits>
@@ -61,6 +64,15 @@ namespace dynamixel_hw
   config_.baud_rate       = *baud_rate;
   config_.left_wheel_name = *left_name;
   config_.right_wheel_name= *right_name;
+
+  // optional: position_feedback (default true)
+  if (auto it = hp.find("position_feedback"); it != hp.end()) {
+    std::string v = it->second;
+    std::transform(v.begin(), v.end(), v.begin(), [](unsigned char c){ return std::tolower(c); });
+    config_.position_feedback = !(v == "false" || v == "0" || v == "no");
+  }
+  RCLCPP_INFO(rclcpp::get_logger("DynamixelHw"), "position_feedback=%s",
+              config_.position_feedback ? "true" : "false (open loop)");
 
 
     for (const hardware_interface::ComponentInfo &joint : info_.joints)
@@ -165,10 +177,30 @@ namespace dynamixel_hw
   {
     RCLCPP_INFO(rclcpp::get_logger("DynamixelHw"), "start");
 
-    dynamixel_connection_.connect(config_.usb_port, config_.baud_rate);
+    if (!dynamixel_connection_.connect(config_.usb_port, config_.baud_rate))
+    {
+      RCLCPP_ERROR(rclcpp::get_logger("DynamixelHw"), "Could not open %s", config_.usb_port.c_str());
+      dynamixel_connection_.disconnect();
+      return CallbackReturn::ERROR;
+    }
 
-    left_wheel_.setup(dynamixel_connection_);
-    right_wheel_.setup(dynamixel_connection_);
+    if (!left_wheel_.setup(dynamixel_connection_) || !right_wheel_.setup(dynamixel_connection_))
+    {
+      RCLCPP_ERROR(rclcpp::get_logger("DynamixelHw"), "Servo setup failed (power, wiring or IDs?)");
+      left_wheel_.shutdown();
+      right_wheel_.shutdown();
+      dynamixel_connection_.disconnect();
+      return CallbackReturn::ERROR;
+    }
+
+    if (config_.position_feedback && !(left_wheel_.init_position() && right_wheel_.init_position()))
+    {
+      RCLCPP_ERROR(rclcpp::get_logger("DynamixelHw"), "Could not read the servo positions");
+      left_wheel_.shutdown();
+      right_wheel_.shutdown();
+      dynamixel_connection_.disconnect();
+      return CallbackReturn::ERROR;
+    }
 
     return CallbackReturn::SUCCESS;
   }
@@ -187,22 +219,34 @@ namespace dynamixel_hw
 
   return_type DynamixelHw::read(const rclcpp::Time & /*time*/, const rclcpp::Duration &period)
   {
+    const double delta_seconds = period.seconds();
 
-    double delta_seconds = period.seconds();
+    if (config_.position_feedback)
+    {
+      // Real wheel position from the servo potentiometers
+      left_wheel_.update_from_hardware(delta_seconds);
+      right_wheel_.update_from_hardware(delta_seconds);
 
-    // Update for the left wheel
-    double left_vel = left_wheel_.get_velocity();
-    left_wheel_.vel = left_vel;
-    left_wheel_.pos += left_vel * delta_seconds; // Integrate velocity to get position
+      constexpr int kMaxConsecutiveReadFailures = 10; // ~0.3 s at 30 Hz
+      if (left_wheel_.consecutive_failures() >= kMaxConsecutiveReadFailures ||
+          right_wheel_.consecutive_failures() >= kMaxConsecutiveReadFailures)
+      {
+        RCLCPP_ERROR(rclcpp::get_logger("DynamixelHw"),
+                     "Lost communication with the servos (%d / %d failed reads in a row)",
+                     left_wheel_.consecutive_failures(), right_wheel_.consecutive_failures());
+        return return_type::ERROR;
+      }
+    }
+    else
+    {
+      // Open loop: integrate the commanded (executed) velocity
+      left_wheel_.vel = left_wheel_.get_velocity();
+      left_wheel_.pos += left_wheel_.vel * delta_seconds;
+      right_wheel_.vel = right_wheel_.get_velocity();
+      right_wheel_.pos += right_wheel_.vel * delta_seconds;
+    }
 
-    RCLCPP_DEBUG(rclcpp::get_logger("DynamixelHw"), "L: %f", left_wheel_.pos);
-
-    // Update for the right wheel
-    double right_vel = right_wheel_.get_velocity();
-    right_wheel_.vel = right_vel;
-    right_wheel_.pos += right_vel * delta_seconds; // Integrate velocity to get position
-
-    RCLCPP_DEBUG(rclcpp::get_logger("DynamixelHw"), "R: %f", right_wheel_.pos);
+    RCLCPP_DEBUG(rclcpp::get_logger("DynamixelHw"), "L: %f  R: %f", left_wheel_.pos, right_wheel_.pos);
 
     return return_type::OK;
   }

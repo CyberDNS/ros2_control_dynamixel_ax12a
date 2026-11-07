@@ -152,3 +152,35 @@ Verify that your plugin is visible to `hardware_interface`:
 ros2 pkg plugins --package hardware_interface | grep dynamixel_hw
 ```
 
+
+## Position feedback (AX-12A potentiometer)
+
+In wheel mode the AX-12A still reports its potentiometer position (register 36, 0..1023 over 300°;
+the remaining 60° is a dead zone with garbage readings). By default the driver reads it every cycle,
+unwraps it into a continuous wheel angle and publishes real `position` / `velocity` state — before,
+these were just the integrated command.
+
+* Dead zone handling: readings are accepted only if they are consistent with the commanded motion;
+  inside the dead zone the position is dead-reckoned and re-synchronised at the next valid reading
+  (see `position_unwrapper.hpp`, covered by unit tests).
+* Present-speed register (38) is **not** used: it returned garbage in wheel mode.
+* `on_activate` now fails (instead of silently succeeding) if the port, a servo, or the first position
+  read does not work, and `read()` returns an error after 10 consecutive failed reads (~0.3 s at 30 Hz).
+* Optional hardware parameter `position_feedback` (default `true`); set `false` to get the old
+  open-loop behaviour.
+* Requests below the minimum wheel speed (80/1023 units, ~0.49 rad/s) are zeroed by the driver; a warning
+  is logged when this happens.
+
+### Required: FTDI latency timer
+
+Each register read takes 8–16 ms with the Linux default `latency_timer` of 16 ms, which is too slow for two
+servos at 30 Hz. Set it to 1 ms:
+
+```bash
+echo 1 | sudo tee /sys/bus/usb-serial/devices/ttyUSB0/latency_timer
+# permanent:
+echo 'ACTION=="add", SUBSYSTEM=="usb-serial", DRIVER=="ftdi_sio", ATTR{latency_timer}="1"' \
+  | sudo tee /etc/udev/rules.d/99-ftdi-latency.rules
+```
+
+Run the unit tests with `colcon test --packages-select dynamixel_hw`.

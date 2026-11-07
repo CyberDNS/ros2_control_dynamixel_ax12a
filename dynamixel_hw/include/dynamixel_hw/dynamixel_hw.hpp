@@ -49,6 +49,8 @@ namespace dynamixel_hw
       std::string right_wheel_name = "";
       std::string usb_port = "";
       int baud_rate = 0;
+      // Use the servos' potentiometers for wheel position/velocity (otherwise: open-loop integration)
+      bool position_feedback = true;
     };
 
   public:
