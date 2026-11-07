@@ -8,10 +8,14 @@
   <license>MIT</license>
   
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>hardware_interface</depend>
+  <depend>pluginlib</depend>
   <depend>rclcpp</depend>
+  <depend>rclcpp_lifecycle</depend>
   <depend>std_msgs</depend>
-  <depend>dynamixel_sdk</depend>
+  <depend>dynamixel_sdk_vendor</depend>
   
+  <test_depend>ament_cmake_gtest</test_depend>
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
   

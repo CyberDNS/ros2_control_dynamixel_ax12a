@@ -15,11 +15,12 @@ namespace dynamixel_hw
 
     bool write2ByteTxRx(uint8_t dynamixel_id, uint16_t address, uint16_t value);
     bool write1ByteTxRx(uint8_t dynamixel_id, uint16_t address, uint8_t value);
+    bool read1ByteTxRx(uint8_t dynamixel_id, uint16_t address, uint8_t *data);
     bool read2ByteTxRx(uint8_t dynamixel_id, uint16_t address, uint16_t *data);
 
   private:
-    dynamixel::PortHandler *portHandler;
-    dynamixel::PacketHandler *packetHandler;
+    dynamixel::PortHandler *portHandler = nullptr;
+    dynamixel::PacketHandler *packetHandler = nullptr;
 
     uint8_t dxl_error = 0;
     int dxl_comm_result = COMM_TX_FAIL;

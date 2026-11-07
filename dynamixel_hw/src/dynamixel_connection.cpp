@@ -65,6 +65,18 @@ namespace dynamixel_hw
     return true;
   };
 
+  bool DynamixelConnection::read1ByteTxRx(uint8_t dynamixel_id, uint16_t address, uint8_t *data)
+  {
+    dxl_comm_result = packetHandler->read1ByteTxRx(portHandler, dynamixel_id, address, data, &dxl_error);
+
+    if (dxl_comm_result != COMM_SUCCESS)
+    {
+      RCLCPP_ERROR(rclcpp::get_logger(LOGGER_IDENTIFIER), "Failed to read 1 byte.");
+      return false;
+    }
+    return true;
+  };
+
   bool DynamixelConnection::read2ByteTxRx(uint8_t dynamixel_id, uint16_t address, uint16_t *data)
   {
     dxl_comm_result = packetHandler->read2ByteTxRx(portHandler, dynamixel_id, address, data, &dxl_error);
@@ -79,10 +91,15 @@ namespace dynamixel_hw
 
   void DynamixelConnection::disconnect()
   {
-    portHandler->closePort();
+    if (portHandler != nullptr)
+    {
+      portHandler->closePort();
+    }
 
     delete packetHandler;
     delete portHandler;
+    packetHandler = nullptr;
+    portHandler = nullptr;
   }
 
 }

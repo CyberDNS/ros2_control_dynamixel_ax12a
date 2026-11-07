@@ -4,13 +4,16 @@
 
 #include "dynamixel_hw/dynamixel_connection.hpp"
 #include "dynamixel_hw/dynamixel_wheel.hpp"
+#include "dynamixel_hw/dead_reckoning.hpp"
 #include "rclcpp/rclcpp.hpp"
 
 #define ADDR_TORQUE_ENABLE 24  // 1 byte
 #define ADDR_CW_ANGLE_LIMIT 6  // 2 byte
 #define ADDR_CCW_ANGLE_LIMIT 8 // 2 byte
 #define ADDR_MOVING_SPEED 32   // 2 byte
-#define ADDR_PRESENT_SPEED 38  // 2 byte
+#define ADDR_PRESENT_VOLTAGE 42 // 1 byte, 0.1 V units
+#define ADDR_PRESENT_POSITION 36 // 2 byte, potentiometer 0..1023 over 300 deg
+#define ADDR_PRESENT_SPEED 38  // 2 byte (unreliable in wheel mode, not used)
 
 #define MIN_MOVING_SPEED_VALUE 80
 #define MAX_MOVING_SPEED_VALUE 1023
@@ -36,6 +39,7 @@ namespace dynamixel_hw
     bool DynamixelWheel::setup(const DynamixelConnection &connection)
     {
         connection_ = connection;
+        connected_ = true;
 
         bool is_success = true;
         // Use wheel mode
@@ -78,6 +82,13 @@ namespace dynamixel_hw
 
     void DynamixelWheel::shutdown()
     {
+        if (!connected_)
+        {
+            return;
+        }
+        connected_ = false;
+        // Speed first: a servo keeps its last speed command even with the controller gone
+        connection_.write2ByteTxRx(dynamixel_id_, ADDR_MOVING_SPEED, 0);
         // Disable Torque of DYNAMIXEL
         bool is_success = connection_.write1ByteTxRx(dynamixel_id_, ADDR_TORQUE_ENABLE, 0);
         if (!is_success)
@@ -93,8 +104,18 @@ namespace dynamixel_hw
     bool DynamixelWheel::rotate(double velocity)
     {
 
-        uint16_t cur_dynamixel_vel = convert_to_dynamixel_vel(vel);
+        uint16_t cur_dynamixel_vel = convert_to_dynamixel_vel(executed_vel_);
         uint16_t dynamixel_vel = convert_to_dynamixel_vel(velocity);
+
+        // A non-zero request that falls into the servo's low-speed deadband does not move the wheel
+        const bool in_deadband = (dynamixel_vel == 0) && (std::fabs(velocity) > 1e-6);
+        if (in_deadband && !deadband_warned_)
+        {
+            RCLCPP_WARN(rclcpp::get_logger(LOGGER_IDENTIFIER),
+                        "%s: requested %.3f rad/s is below the minimum wheel speed (%.3f rad/s) and is ignored",
+                        name.c_str(), velocity, MIN_MOVING_SPEED_VALUE / CONVERSION_FACTOR);
+        }
+        deadband_warned_ = in_deadband;
 
         if (dynamixel_vel != cur_dynamixel_vel)
         {
@@ -110,9 +131,9 @@ namespace dynamixel_hw
             }
         }
         
-        vel = convert_to_ros_control_vel(dynamixel_vel);
+        executed_vel_ = convert_to_ros_control_vel(dynamixel_vel);
 
-        RCLCPP_DEBUG(rclcpp::get_logger(LOGGER_IDENTIFIER), "%s: requested=%f executed=%f", name.c_str(), velocity, vel);
+        RCLCPP_DEBUG(rclcpp::get_logger(LOGGER_IDENTIFIER), "%s: requested=%f executed=%f", name.c_str(), velocity, executed_vel_);
 
 
         return true;
@@ -120,7 +141,104 @@ namespace dynamixel_hw
 
     double DynamixelWheel::get_velocity()
     {
-        return vel;
+        return executed_vel_;
+    }
+
+    bool DynamixelWheel::stop()
+    {
+        executed_vel_ = 0.0;
+        controller_.reset();
+        if (!connected_)
+        {
+            return false;
+        }
+        return connection_.write2ByteTxRx(dynamixel_id_, ADDR_MOVING_SPEED, 0);
+    }
+
+    bool DynamixelWheel::read_voltage(double &volts)
+    {
+        uint8_t raw = 0;
+        if (!connected_ || !connection_.read1ByteTxRx(dynamixel_id_, ADDR_PRESENT_VOLTAGE, &raw))
+        {
+            return false;
+        }
+        volts = raw / 10.0;
+        return true;
+    }
+
+    void DynamixelWheel::configure_velocity_loop(bool enabled, const VelocityController::Params &params)
+    {
+        velocity_loop_ = enabled;
+        controller_ = VelocityController(params);
+    }
+
+    bool DynamixelWheel::drive(double target_velocity, double dt)
+    {
+        if (!std::isfinite(target_velocity))
+        {
+            target_velocity = 0.0;
+        }
+        if (!velocity_loop_ || !feedback_active_)
+        {
+            return rotate(target_velocity);
+        }
+        return rotate(controller_.update(target_velocity, estimator_.velocity(), estimator_.valid(), dt, pos, true));
+    }
+
+    bool DynamixelWheel::init_position()
+    {
+        uint16_t raw = 0;
+        if (!connection_.read2ByteTxRx(dynamixel_id_, ADDR_PRESENT_POSITION, &raw))
+        {
+            RCLCPP_ERROR(rclcpp::get_logger(LOGGER_IDENTIFIER), "%s: failed to read the initial position.", name.c_str());
+            return false;
+        }
+        unwrapper_.reset(raw);
+        anchor_counts_ = unwrapper_.position_counts();
+        pos = 0.0;
+        prev_pos_ = 0.0;
+        vel = 0.0;
+        consecutive_failures_ = 0;
+        estimator_.reset(0.0);
+        controller_.reset();
+        prev_reading_used_ = true;
+        feedback_active_ = true;
+        RCLCPP_INFO(rclcpp::get_logger(LOGGER_IDENTIFIER), "%s: position feedback started at raw=%u (velocity loop %s)",
+                    name.c_str(), raw, velocity_loop_ ? "on" : "off");
+        return true;
+    }
+
+    bool DynamixelWheel::update_from_hardware(double dt)
+    {
+        if (dt <= 0.0)
+        {
+            return true;
+        }
+
+        uint16_t raw = 0;
+        const bool read_ok = connection_.read2ByteTxRx(dynamixel_id_, ADDR_PRESENT_POSITION, &raw);
+        consecutive_failures_ = read_ok ? 0 : consecutive_failures_ + 1;
+
+        // Motion expected since the last cycle, in potentiometer counts (sign of the servo frame).
+        // The measured velocity predicts better than the command (the servo does not run at the
+        // commanded speed); at the start of a motion, before the measurement catches up, use the command.
+        const double predict_vel = prediction_velocity(executed_vel_, estimator_.velocity());
+        const double predicted_counts = inverted_ * predict_vel * dt / PositionUnwrapper::kRadPerCount;
+
+        // A failed read is fed in as an invalid value: the position is then dead-reckoned
+        const bool used = unwrapper_.update(read_ok ? static_cast<int>(raw) : -1, predicted_counts);
+
+        pos = inverted_ * (unwrapper_.position_counts() - anchor_counts_) * PositionUnwrapper::kRadPerCount;
+
+        // A sample is "clean" only if it is a real reading that follows another real reading;
+        // dead-reckoned samples and the re-synchronising jump after them would distort the velocity.
+        estimator_.push(pos, dt, used && prev_reading_used_);
+        prev_reading_used_ = used;
+        // the estimate is frozen while readings are rejected: a stopped wheel must read zero
+        vel = (std::fabs(executed_vel_) < 1e-6 && !estimator_.valid()) ? 0.0 : estimator_.velocity();
+        prev_pos_ = pos;
+
+        return read_ok;
     }
 
     uint16_t DynamixelWheel::convert_to_dynamixel_vel(double rad_vel)
