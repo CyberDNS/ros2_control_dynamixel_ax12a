@@ -9,8 +9,8 @@ namespace dynamixel_hw
    * Turns the raw AX-12A potentiometer reading into a continuous (unwrapped) position.
    *
    * The AX-12A reports its position as 0..1023 over 300 degrees. The remaining 60 degrees
-   * of a revolution are a dead zone where the potentiometer wiper is not on the track and
-   * the reading is garbage (measured on the robot: values like 630..650 between 1023 and 0).
+   * of a revolution are a dead zone where the potentiometer wiper is not on the track. The reading
+   * there is 1023, then garbage (~625), then 0 (see kMinValidRaw).
    *
    * Strategy: every reading is turned into the revolution-unwrapped candidate that is closest
    * to a prediction (last position + expected motion). If that candidate is within
@@ -27,6 +27,12 @@ namespace dynamixel_hw
   {
   public:
     static constexpr int kMaxRaw = 1023;
+    // Measured on the robot's AX-12A: the dead zone is not just garbage. The reading saturates at
+    // 1023 for ~88 counts, then shows garbage (~625) for ~30 counts, then sits at 0 for ~88 counts
+    // before the track starts. Both end values are therefore plateaus, not positions, and must not
+    // be trusted (the wheel moves on while the reading stays put).
+    static constexpr int kMinValidRaw = 1;
+    static constexpr int kMaxValidRaw = 1022;
     static constexpr double kRevolutionCounts = 1023.0 * 360.0 / 300.0; // 1227.6
     static constexpr double kRadPerCount = 2.0 * M_PI / kRevolutionCounts;
 
@@ -69,7 +75,7 @@ namespace dynamixel_hw
 
       const double predicted = position_ + predicted_delta_counts;
 
-      if (raw < 0 || raw > kMaxRaw)
+      if (raw < kMinValidRaw || raw > kMaxValidRaw)
       {
         return reject(predicted);
       }

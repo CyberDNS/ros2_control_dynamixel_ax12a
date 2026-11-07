@@ -20,11 +20,14 @@ namespace
     {
       m += kRev;
     }
-    if (m <= PositionUnwrapper::kMaxRaw)
+    if (m <= PositionUnwrapper::kMaxValidRaw)
     {
       return static_cast<int>(std::lround(m));
     }
-    return 640;
+    // dead zone as measured: plateau at 1023, garbage, plateau at 0
+    if (m < 1110.0) return 1023;
+    if (m < 1140.0) return 640;
+    return 0;
   }
 
   // Drive a motion profile. The wheel really moves `step` counts per cycle while the
@@ -119,6 +122,18 @@ TEST(PositionUnwrapper, GarbageReadingIsRejected)
   EXPECT_FALSE(u.update(640, 10.0));
   EXPECT_NEAR(u.position_counts(), 1010.0, 1e-9);
   EXPECT_EQ(u.rejected_in_a_row(), 1);
+}
+
+TEST(PositionUnwrapper, SaturatedEndValuesAreRejected)
+{
+  PositionUnwrapper u;
+  u.reset(1000);
+  EXPECT_FALSE(u.update(1023, 15.0));
+  EXPECT_NEAR(u.position_counts(), 1015.0, 1e-9);
+  EXPECT_FALSE(u.update(0, 15.0));
+  EXPECT_NEAR(u.position_counts(), 1030.0, 1e-9);
+  EXPECT_TRUE(u.update(5, 0.0)); // first real reading after the dead zone
+  EXPECT_NEAR(u.position_counts(), 5.0 + PositionUnwrapper::kRevolutionCounts, 1e-9);
 }
 
 TEST(PositionUnwrapper, OutOfRangeReadingIsRejected)
