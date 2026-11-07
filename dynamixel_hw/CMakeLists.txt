@@ -60,6 +60,13 @@ install(TARGETS dynamixel_hw
   RUNTIME DESTINATION bin
 )
 
+# ---- Tests ------------------------------------------------------------------
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_position_unwrapper test/test_position_unwrapper.cpp)
+  target_include_directories(test_position_unwrapper PRIVATE include)
+endif()
+
 # ---- Ament exports ----------------------------------------------------------
 ament_export_targets(export_dynamixel_hw HAS_LIBRARY_TARGET)
 ament_export_dependencies(${THIS_PACKAGE_INCLUDE_DEPENDS})
