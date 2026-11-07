@@ -134,6 +134,25 @@ namespace dynamixel_hw
         return executed_vel_;
     }
 
+    void DynamixelWheel::configure_velocity_loop(bool enabled, const VelocityController::Params &params)
+    {
+        velocity_loop_ = enabled;
+        controller_ = VelocityController(params);
+    }
+
+    bool DynamixelWheel::drive(double target_velocity, double dt)
+    {
+        if (!std::isfinite(target_velocity))
+        {
+            target_velocity = 0.0;
+        }
+        if (!velocity_loop_ || !feedback_active_)
+        {
+            return rotate(target_velocity);
+        }
+        return rotate(controller_.update(target_velocity, estimator_.velocity(), estimator_.valid(), dt));
+    }
+
     bool DynamixelWheel::init_position()
     {
         uint16_t raw = 0;
@@ -148,7 +167,12 @@ namespace dynamixel_hw
         prev_pos_ = 0.0;
         vel = 0.0;
         consecutive_failures_ = 0;
-        RCLCPP_INFO(rclcpp::get_logger(LOGGER_IDENTIFIER), "%s: position feedback started at raw=%u", name.c_str(), raw);
+        estimator_.reset(0.0);
+        controller_.reset();
+        prev_reading_used_ = true;
+        feedback_active_ = true;
+        RCLCPP_INFO(rclcpp::get_logger(LOGGER_IDENTIFIER), "%s: position feedback started at raw=%u (velocity loop %s)",
+                    name.c_str(), raw, velocity_loop_ ? "on" : "off");
         return true;
     }
 
@@ -163,24 +187,22 @@ namespace dynamixel_hw
         const bool read_ok = connection_.read2ByteTxRx(dynamixel_id_, ADDR_PRESENT_POSITION, &raw);
         consecutive_failures_ = read_ok ? 0 : consecutive_failures_ + 1;
 
-        // Motion expected since the last cycle, in potentiometer counts (sign of the servo frame)
-        const double predicted_counts = inverted_ * executed_vel_ * dt / PositionUnwrapper::kRadPerCount;
+        // Motion expected since the last cycle, in potentiometer counts (sign of the servo frame).
+        // The measured velocity predicts better than the command (the servo does not run at the
+        // commanded speed); at the start of a motion, before the measurement catches up, use the command.
+        const double predict_vel = (std::fabs(estimator_.velocity()) > 0.1) ? estimator_.velocity() : executed_vel_;
+        const double predicted_counts = inverted_ * predict_vel * dt / PositionUnwrapper::kRadPerCount;
 
         // A failed read is fed in as an invalid value: the position is then dead-reckoned
         const bool used = unwrapper_.update(read_ok ? static_cast<int>(raw) : -1, predicted_counts);
 
         pos = inverted_ * (unwrapper_.position_counts() - anchor_counts_) * PositionUnwrapper::kRadPerCount;
 
-        if (used)
-        {
-            // Light low-pass on the finite-difference velocity (one count is ~0.15 rad/s at 30 Hz)
-            constexpr double alpha = 0.3;
-            vel = alpha * (pos - prev_pos_) / dt + (1.0 - alpha) * vel;
-        }
-        else
-        {
-            vel = executed_vel_;
-        }
+        // A sample is "clean" only if it is a real reading that follows another real reading;
+        // dead-reckoned samples and the re-synchronising jump after them would distort the velocity.
+        estimator_.push(pos, dt, used && prev_reading_used_);
+        prev_reading_used_ = used;
+        vel = estimator_.velocity();
         prev_pos_ = pos;
 
         return read_ok;

@@ -51,6 +51,10 @@ namespace dynamixel_hw
       int baud_rate = 0;
       // Use the servos' potentiometers for wheel position/velocity (otherwise: open-loop integration)
       bool position_feedback = true;
+      // PI correction of the wheel speed with the measured velocity (requires position_feedback)
+      bool velocity_loop = true;
+      double velocity_kp = 0.3;
+      double velocity_ki = 2.0;
     };
 
   public:

@@ -65,6 +65,8 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(test_position_unwrapper test/test_position_unwrapper.cpp)
   target_include_directories(test_position_unwrapper PRIVATE include)
+  ament_add_gtest(test_velocity_loop test/test_velocity_loop.cpp)
+  target_include_directories(test_velocity_loop PRIVATE include)
 endif()
 
 # ---- Ament exports ----------------------------------------------------------

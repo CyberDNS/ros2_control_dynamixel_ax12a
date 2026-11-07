@@ -71,8 +71,31 @@ namespace dynamixel_hw
     std::transform(v.begin(), v.end(), v.begin(), [](unsigned char c){ return std::tolower(c); });
     config_.position_feedback = !(v == "false" || v == "0" || v == "no");
   }
-  RCLCPP_INFO(rclcpp::get_logger("DynamixelHw"), "position_feedback=%s",
-              config_.position_feedback ? "true" : "false (open loop)");
+  auto get_bool = [&](const char *key, bool fallback) {
+    auto it = hp.find(key);
+    if (it == hp.end()) return fallback;
+    std::string v = it->second;
+    std::transform(v.begin(), v.end(), v.begin(), [](unsigned char c){ return std::tolower(c); });
+    return !(v == "false" || v == "0" || v == "no");
+  };
+  auto get_double = [&](const char *key, double fallback) {
+    auto it = hp.find(key);
+    if (it == hp.end()) return fallback;
+    try { return std::stod(it->second); } catch (...) { return fallback; }
+  };
+  config_.velocity_loop = config_.position_feedback && get_bool("velocity_loop", true);
+  config_.velocity_kp = get_double("velocity_kp", config_.velocity_kp);
+  config_.velocity_ki = get_double("velocity_ki", config_.velocity_ki);
+  RCLCPP_INFO(rclcpp::get_logger("DynamixelHw"), "position_feedback=%s velocity_loop=%s (kp=%.2f ki=%.2f)",
+              config_.position_feedback ? "true" : "false (open loop)",
+              config_.velocity_loop ? "true" : "false", config_.velocity_kp, config_.velocity_ki);
+  {
+    VelocityController::Params vp;
+    vp.kp = config_.velocity_kp;
+    vp.ki = config_.velocity_ki;
+    left_wheel_.configure_velocity_loop(config_.velocity_loop, vp);
+    right_wheel_.configure_velocity_loop(config_.velocity_loop, vp);
+  }
 
 
     for (const hardware_interface::ComponentInfo &joint : info_.joints)
@@ -251,17 +274,18 @@ namespace dynamixel_hw
     return return_type::OK;
   }
 
-  return_type DynamixelHw::write(const rclcpp::Time & /* time */, const rclcpp::Duration & /* period */)
+  return_type DynamixelHw::write(const rclcpp::Time & /* time */, const rclcpp::Duration &period)
   {
     bool is_success = false;
+    const double dt = period.seconds();
 
-    is_success = left_wheel_.rotate(left_wheel_.cmd);
+    is_success = left_wheel_.drive(left_wheel_.cmd, dt);
     if (!is_success)
     {
       RCLCPP_ERROR(rclcpp::get_logger("DynamixelHw"), "Failed to rotate left wheel.");
     }
 
-    is_success = right_wheel_.rotate(right_wheel_.cmd);
+    is_success = right_wheel_.drive(right_wheel_.cmd, dt);
     if (!is_success)
     {
       RCLCPP_ERROR(rclcpp::get_logger("DynamixelHw"), "Failed to rotate right wheel.");

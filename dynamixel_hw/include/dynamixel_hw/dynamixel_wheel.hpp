@@ -4,6 +4,8 @@
 #include <string>
 #include <dynamixel_hw/dynamixel_connection.hpp>
 #include <dynamixel_hw/position_unwrapper.hpp>
+#include <dynamixel_hw/velocity_controller.hpp>
+#include <dynamixel_hw/velocity_estimator.hpp>
 
 namespace dynamixel_hw
 {
@@ -21,6 +23,10 @@ namespace dynamixel_hw
     void shutdown();
 
     bool rotate(double velocity);
+    /// Command a wheel velocity [rad/s]. With the velocity loop enabled the command is corrected
+    /// with the measured velocity (needs init_position()); otherwise it is sent as is.
+    bool drive(double target_velocity, double dt);
+    void configure_velocity_loop(bool enabled, const VelocityController::Params &params);
     /// Velocity the servo was last told to run at (after quantisation and deadband) [rad/s].
     double get_velocity();
 
@@ -38,6 +44,11 @@ namespace dynamixel_hw
     int8_t inverted_;
 
     double executed_vel_ = 0.0; // [rad/s] what the servo was last told to do
+    VelocityEstimator estimator_;
+    VelocityController controller_;
+    bool velocity_loop_ = false;
+    bool feedback_active_ = false;
+    bool prev_reading_used_ = true;
     PositionUnwrapper unwrapper_;
     double anchor_counts_ = 0.0;
     double prev_pos_ = 0.0;
