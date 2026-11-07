@@ -35,6 +35,7 @@
 #include "dynamixel_hw/dynamixel_connection.hpp"
 #include "dynamixel_hw/dynamixel_wheel.hpp"
 #include "dynamixel_hw/visiblity_control.h"
+#include "dynamixel_hw/voltage_monitor.hpp"
 
 using hardware_interface::CallbackReturn;
 using hardware_interface::return_type;
@@ -49,6 +50,15 @@ namespace dynamixel_hw
       std::string right_wheel_name = "";
       std::string usb_port = "";
       int baud_rate = 0;
+      // Use the servos' potentiometers for wheel position/velocity (otherwise: open-loop integration)
+      bool position_feedback = true;
+      // PI correction of the wheel speed with the measured velocity (requires position_feedback)
+      bool velocity_loop = true;
+      double velocity_kp = 0.3;
+      double velocity_ki = 2.0;
+      // Servo supply monitoring [V]; 0 disables the check
+      double min_voltage_warn = 10.5;
+      double min_voltage_stop = 9.6;
     };
 
   public:
@@ -70,6 +80,9 @@ namespace dynamixel_hw
     CallbackReturn on_deactivate(const rclcpp_lifecycle::State &previous_state) override;
 
     DYNAMIXEL_HW_PUBLIC
+    CallbackReturn on_error(const rclcpp_lifecycle::State &previous_state) override;
+
+    DYNAMIXEL_HW_PUBLIC
     return_type read(const rclcpp::Time &time, const rclcpp::Duration &period) override;
 
     DYNAMIXEL_HW_PUBLIC
@@ -82,6 +95,10 @@ namespace dynamixel_hw
     dynamixel_hw::DynamixelConnection dynamixel_connection_;
 
     Config config_;
+
+    VoltageMonitor voltage_monitor_;
+    double seconds_since_voltage_check_ = 0.0;
+    int voltage_warnings_ = 0;
   };
 
 } // namespace dynamixel_hw
